@@ -128,6 +128,13 @@ def dialog_context_keep_latest(dialog_texts, max_length=1):
         dialog_texts = dialog_texts[-max_length:]
     return dialog_texts
 
+def remove_url_from_text(text, urls):
+    # only remove youtube url
+    for url in urls:
+        if 'youtube.com' in url or 'youtu.be' in url:
+            text = text.replace('<' + url + '>', '')
+    return text
+
 def format_dialog_text(text, voicemessage=None):
     if text is None:
         return voicemessage if voicemessage else ''
@@ -192,7 +199,16 @@ def bot_process(event, say, logger):
         thread_message_history[parent_thread_ts] = { 'dialog_texts': [], 'context_urls': set(), 'file': None}
 
     if "text" in event or voicemessage:
-        update_thread_history(parent_thread_ts, f'User: {format_dialog_text(event["text"], voicemessage)}', extract_urls_from_event(event))
+        urls = extract_urls_from_event(event)
+        logger.info(f'=====> Extracted urls from event: {urls}')
+        try:
+            dialog = remove_url_from_text(format_dialog_text(event["text"], voicemessage), urls)
+            logger.info(f'=====> Formatted dialog: {dialog}')
+            update_thread_history(parent_thread_ts, f'User: {dialog}', urls)
+        except Exception as e:
+            logger.error(e)
+            say(f'<@{user}>, something went wrong, please try again later', thread_ts=thread_ts)
+            return
 
     if file_md5_name is not None:
         if not voicemessage:
@@ -291,7 +307,7 @@ def send_welcome_message(logger, event):
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": "1. Go to the channel #general and mention the bot with the command `@my-gpt-reader-bot` to get started.\n 2. You can post a link to an article or document with your question, and the bot will give your answer based the article or document.\n 3. You can also talk to the bot with any question, and the bot will give your answer based on the context of the conversation.\n 4. You can talk to the bot via voice message, and the bot also will respond with a voice message. We think it is a good way to practice your second language."
+                    "text": "0. Go to the channel #general to know the latest news about the product.\n 1. Go to the channel #temp and mention the bot with the command `@my-gpt-reader-bot` to get started.\n 2. You can post a link to an article or document with your question, and the bot will give your answer based the article or document.\n 3. You can also talk to the bot with any question, and the bot will give your answer based on the context of the conversation.\n 4. You can talk to the bot via voice message, and the bot also will respond with a voice message. We think it is a good way to practice your second language."
                 }
             },
             {
@@ -301,7 +317,7 @@ def send_welcome_message(logger, event):
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": "*Free plan limitation* \n 1. Free users can only talk to the bot in the public channel. If you want to a private conversation with the bot, please subscribe to our Premium plan to support our service.\n 2. There is a rate limit of {limiter_message_per_user} messages per {limiter_time_period / 3600} hour. If you want to send more messages, please subscribe to our Premium plan to support our service."
+                    "text": f"*Free plan limitation* \n 1. Free users can only talk to the bot in the public channel. If you want to a private conversation with the bot, please subscribe to our Premium plan to support our service.\n 2. There is a rate limit of {limiter_message_per_user} messages per {limiter_time_period / 3600} hour. If you want to send more messages, please subscribe to our Premium plan to support our service."
                 }
             },
             {
