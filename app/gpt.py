@@ -6,7 +6,7 @@ import random
 import uuid
 import openai
 from pathlib import Path
-from llama_index import GPTSimpleVectorIndex, LLMPredictor, RssReader, SimpleDirectoryReader
+from llama_index import ServiceContext, GPTVectorStoreIndex, LLMPredictor, RssReader, SimpleDirectoryReader, StorageContext, load_index_from_storage
 from llama_index.readers.schema.base import Document
 from langchain.chat_models import ChatOpenAI
 from azure.cognitiveservices.speech import SpeechConfig, SpeechSynthesizer, ResultReason, CancellationReason, SpeechSynthesisOutputFormat
@@ -21,12 +21,9 @@ SPEECH_KEY = os.environ.get('SPEECH_KEY')
 SPEECH_REGION = os.environ.get('SPEECH_REGION')
 openai.api_key = OPENAI_API_KEY
 
-llm_predictor = LLMPredictor(llm=ChatOpenAI(
-    temperature=0.2, model_name="gpt-3.5-turbo"))
-
 index_cache_web_dir = Path('/tmp/myGPTReader/cache_web/')
-index_cache_voice_dir = Path('/tmp/myGPTReader/voice/')
 index_cache_file_dir = Path('/data/myGPTReader/file/')
+index_cache_voice_dir = Path('/tmp/myGPTReader/voice/')
 
 if not index_cache_web_dir.is_dir():
     index_cache_web_dir.mkdir(parents=True, exist_ok=True)
@@ -36,6 +33,14 @@ if not index_cache_voice_dir.is_dir():
 
 if not index_cache_file_dir.is_dir():
     index_cache_file_dir.mkdir(parents=True, exist_ok=True)
+
+llm_predictor = LLMPredictor(llm=ChatOpenAI(
+    temperature=0, model_name="gpt-3.5-turbo"))
+
+service_context = ServiceContext.from_defaults(llm_predictor=llm_predictor)
+
+web_storage_context = StorageContext.from_defaults()
+file_storage_context = StorageContext.from_defaults()
 
 def get_unique_md5(urls):
     urls_str = ''.join(sorted(urls))
@@ -79,27 +84,25 @@ def get_documents_from_urls(urls):
     return documents
 
 def get_index_from_web_cache(name):
-    web_cache_file = index_cache_web_dir / name
-    if not web_cache_file.is_file():
+    try:
+        index = load_index_from_storage(web_storage_context, index_id=name)
+    except Exception as e:
+        logging.error(e)
         return None
-    index = GPTSimpleVectorIndex.load_from_disk(web_cache_file)
-    logging.info(
-        f"=====> Get index from web cache: {web_cache_file}")
     return index
 
 def get_index_from_file_cache(name):
-    file_cache_file = index_cache_file_dir / name
-    if not file_cache_file.is_file():
+    try:
+        index = load_index_from_storage(file_storage_context, index_id=name)
+    except Exception as e:
+        logging.error(e)
         return None
-    index = GPTSimpleVectorIndex.load_from_disk(file_cache_file)
-    logging.info(
-        f"=====> Get index from file cache: {file_cache_file}")
     return index
 
 def get_index_name_from_file(file: str):
     file_md5_with_extension = str(Path(file).relative_to(index_cache_file_dir).name)
     file_md5 = file_md5_with_extension.split('.')[0]
-    return file_md5 + '.json'
+    return file_md5
 
 def get_answer_from_chatGPT(messages):
     dialog_messages = format_dialog_messages(messages)
@@ -124,19 +127,20 @@ def get_answer_from_llama_web(messages, urls):
         logging.info(f"=====> Build index from web!")
         documents = get_documents_from_urls(combained_urls)
         logging.info(documents)
-        index = GPTSimpleVectorIndex(documents)
+        index = GPTVectorStoreIndex.from_documents(documents, service_context=service_context)
+        index.set_index_id(index_file_name)
+        index.storage_context.persist()
         logging.info(
             f"=====> Save index to disk path: {index_cache_web_dir / index_file_name}")
-        index.save_to_disk(index_cache_web_dir / index_file_name)
     prompt = get_prompt_template(lang_code)
     logging.info('=====> Use llama web with chatGPT to answer!')
     logging.info('=====> dialog_messages')
     logging.info(dialog_messages)
     logging.info('=====> text_qa_template')
     logging.info(prompt.prompt)
-    answer = index.query(dialog_messages, llm_predictor=llm_predictor, text_qa_template=prompt)
+    answer = index.as_query_engine(text_qa_template=prompt).query(dialog_messages)
     total_llm_model_tokens = llm_predictor.last_token_usage
-    total_embedding_model_tokens = index.embed_model.last_token_usage
+    total_embedding_model_tokens = service_context.embed_model.last_token_usage
     return answer, total_llm_model_tokens, total_embedding_model_tokens
 
 def get_answer_from_llama_file(messages, file):
@@ -147,19 +151,20 @@ def get_answer_from_llama_file(messages, file):
     if index is None:
         logging.info(f"=====> Build index from file!")
         documents = SimpleDirectoryReader(input_files=[file]).load_data()
-        index = GPTSimpleVectorIndex(documents)
+        index = GPTVectorStoreIndex.from_documents(documents, service_context=service_context)
+        index.set_index_id(index_name)
+        index.storage_context.persist()
         logging.info(
             f"=====> Save index to disk path: {index_cache_file_dir / index_name}")
-        index.save_to_disk(index_cache_file_dir / index_name)
     prompt = get_prompt_template(lang_code)
     logging.info('=====> Use llama file with chatGPT to answer!')
     logging.info('=====> dialog_messages')
     logging.info(dialog_messages)
     logging.info('=====> text_qa_template')
     logging.info(prompt)
-    answer = index.query(dialog_messages, llm_predictor=llm_predictor, text_qa_template=prompt)
+    answer = answer = index.as_query_engine(text_qa_template=prompt).query(dialog_messages)
     total_llm_model_tokens = llm_predictor.last_token_usage
-    total_embedding_model_tokens = index.embed_model.last_token_usage
+    total_embedding_model_tokens = service_context.embed_model.last_token_usage
     return answer, total_llm_model_tokens, total_embedding_model_tokens
 
 def get_text_from_whisper(voice_file_path):

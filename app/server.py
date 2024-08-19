@@ -13,7 +13,7 @@ import concurrent.futures
 from app.daily_hot_news import build_all_news_block
 from app.gpt import get_answer_from_chatGPT, get_answer_from_llama_file, get_answer_from_llama_web, get_text_from_whisper, get_voice_file_from_text, index_cache_file_dir
 from app.rate_limiter import RateLimiter
-from app.user import get_user, is_premium_user, update_message_token_usage
+from app.user import get_user, is_premium_user, is_active_user, update_message_token_usage
 from app.util import md5
 
 class Config:
@@ -119,8 +119,8 @@ filetype_extension_allowed = ['epub', 'pdf', 'text', 'docx', 'markdown', 'm4a', 
 filetype_voice_extension_allowed = ['m4a', 'webm', 'mp3', 'wav']
 max_file_size = 3 * 1024 * 1024
 
-limiter_message_per_user = 15
-limiter_time_period = 3 * 3600
+limiter_message_per_user = 5
+limiter_time_period = 24 * 3600
 limiter = RateLimiter(limit=limiter_message_per_user, period=limiter_time_period)
     
 def dialog_context_keep_latest(dialog_texts, max_length=1):
@@ -253,9 +253,13 @@ def handle_mentions(event, say, logger):
     user = event["user"]
     thread_ts = event["ts"]
 
+    if not is_active_user(user):
+        say(f'<@{user}>, 你的账户未激活，请微信联系 `improve365_cn` 管理员激活你的账户后再试用。', thread_ts=thread_ts)
+        return
+
     if not limiter.allow_request(user):
         if not is_premium_user(user):
-            say(f'<@{user}>, you have reached the limit of {limiter_message_per_user} messages {limiter_time_period / 3600} hour, please subscribe to our Premium plan to support our service. You can find the payment link by clicking on the bot and selecting the Home tab.', thread_ts=thread_ts)
+            say(f'<@{user}>, 免费用户试用额度为 {limiter_message_per_user} 条对话每 {limiter_time_period / 3600} 小时, 你已超出该限制，请等待后再试。如欲购买请微信联系 `improve365_cn` 管理员。', thread_ts=thread_ts)
             return
     
     bot_process(event, say, logger)
@@ -507,6 +511,18 @@ def update_home_tab(client, event, logger):
                     "type": "mrkdwn",
                     "text": f"*User message count:* {message_month_count or ''}"
                 }
+            },
+            {
+                "type": "divider"
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": "Powered by https://www.i365.tech/"
+                    }
+                ]
             }
         ]
         user_block_info.extend(blocks)
